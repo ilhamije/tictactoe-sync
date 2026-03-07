@@ -70,6 +70,9 @@ function TicTacToeContent() {
     setLoading(false)
   }
 
+  const [players, setPlayers] = useState<{ [key: string]: any }>({})
+  const [player2Joined, setPlayer2Joined] = useState(false)
+
   useEffect(() => {
     // Check for Supabase setup
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
@@ -117,8 +120,15 @@ function TicTacToeContent() {
     if (roomId) {
       fetchGame(roomId)
 
-      const channel = supabase
-        .channel(`room:${roomId}`)
+      const channel = supabase.channel(`room:${roomId}`, {
+        config: {
+          presence: {
+            key: mySymbol || 'unknown',
+          },
+        },
+      })
+
+      channel
         .on('postgres_changes', {
           event: 'UPDATE',
           schema: 'public',
@@ -128,9 +138,24 @@ function TicTacToeContent() {
           setBoard(payload.new.board)
           setTurn(payload.new.current_turn)
           setWinner(payload.new.winner)
-          setError(null) // Clear errors if sync works
+          setError(null)
         })
-        .subscribe((status) => {
+        .on('presence', { event: 'sync' }, () => {
+          const state = channel.presenceState()
+          setPlayers(state)
+          // If we see 'O' in the presence state, Player 2 has joined
+          setPlayer2Joined(!!state['O'])
+        })
+        .on('presence', { event: 'join' }, ({ key, newPresences }) => {
+          console.log('join', key, newPresences)
+        })
+        .on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
+          console.log('leave', key, leftPresences)
+        })
+        .subscribe(async (status) => {
+          if (status === 'SUBSCRIBED') {
+            await channel.track({ online_at: new Date().toISOString() })
+          }
           if (status === 'CHANNEL_ERROR') {
             setError("Real-time sync error. Make sure 'Realtime' is enabled for the 'games' table in Supabase.")
           }
@@ -140,7 +165,7 @@ function TicTacToeContent() {
         supabase.removeChannel(channel)
       }
     }
-  }, [roomId, fetchGame])
+  }, [roomId, fetchGame, mySymbol])
 
   const handleMove = async (index: number) => {
     if (board[index] || winner || turn !== mySymbol || !roomId) return
@@ -198,17 +223,26 @@ function TicTacToeContent() {
     }
   }, [winner, mySymbol, roomId])
 
-  const Square = ({ value, index }: { value: string | null, index: number }) => (
-    <div
-      onClick={() => handleMove(index)}
-      className="w-24 h-24 sm:w-32 sm:h-32 flex items-center justify-center text-6xl font-bold cursor-pointer transition-all hover:brightness-95 active:scale-95 bg-white sm:rounded-md"
-      style={{
-        color: value === 'X' ? colors.x : colors.o,
-      }}
-    >
-      {value}
-    </div>
-  )
+  const Square = ({ value, index }: { value: string | null, index: number }) => {
+    const isClickable = !value && !winner && turn === mySymbol
+    return (
+      <div
+        onClick={() => handleMove(index)}
+        className={`w-24 h-24 sm:w-32 sm:h-32 flex items-center justify-center text-6xl font-bold transition-all duration-200 
+          ${isClickable ? 'cursor-pointer hover:bg-gray-50 active:scale-95' : 'cursor-default'} 
+          bg-white sm:rounded-md shadow-[inset_0_0_0_1px_rgba(0,0,0,0.05)]`}
+        style={{
+          color: value === 'X' ? colors.x : colors.o,
+        }}
+      >
+        {value === 'X' && <span className="animate-in zoom-in duration-300">X</span>}
+        {value === 'O' && <span className="animate-in zoom-in duration-300">O</span>}
+        {!value && isClickable && (
+          <div className="w-4 h-4 rounded-full bg-gray-100 opacity-0 group-hover:opacity-100 transition-opacity" />
+        )}
+      </div>
+    )
+  }
 
   const copyLink = () => {
     navigator.clipboard.writeText(window.location.href)
@@ -243,33 +277,35 @@ function TicTacToeContent() {
                 <User size={20} />
               </div>
               <div className="flex flex-col">
-                <span className="text-[10px] uppercase font-bold text-gray-400">Your Symbol</span>
-                <span className="font-bold text-gray-800 leading-none">{mySymbol} ({mySymbol === 'X' ? 'Creator' : 'Joiner'})</span>
+                <span className="text-[10px] uppercase font-bold text-gray-400">Role</span>
+                <span className="font-bold text-gray-800 leading-none">{mySymbol === 'X' ? 'Player 1 (X)' : 'Player 2 (O)'}</span>
               </div>
             </div>
 
             <div className="flex flex-col items-center">
               <span className="text-[10px] uppercase font-bold text-gray-400">Current Turn</span>
               <div className={`px-4 py-1 rounded-full font-bold text-white transition-all transform ${turn === 'X' ? 'bg-[#2196F3]' : 'bg-[#FF9800]'} ${turn === mySymbol ? 'scale-110 shadow-lg' : 'opacity-70'}`}>
-                {turn} {turn === mySymbol ? '(YOU)' : ''}
+                {turn === 'X' ? 'Player 1' : 'Player 2'} {turn === mySymbol ? '(YOU)' : ''}
               </div>
             </div>
           </div>
 
-          <div className="p-6 bg-white rounded-[2rem] shadow-xl flex flex-col items-center gap-4 relative group">
-            <div className="relative">
-              <QRCodeSVG value={typeof window !== 'undefined' ? window.location.href : ''} size={150} />
-              <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-white/80 rounded-lg">
-                <button onClick={copyLink} className="bg-gray-800 text-white px-4 py-2 rounded-full flex items-center gap-2 text-xs font-bold">
-                  <Share2 size={14} /> Copy Link
-                </button>
+          {!player2Joined && (
+            <div className="p-6 bg-white rounded-[2rem] shadow-xl flex flex-col items-center gap-4 relative group animate-in zoom-in duration-500">
+              <div className="relative">
+                <QRCodeSVG value={typeof window !== 'undefined' ? window.location.href : ''} size={150} />
+                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-white/80 rounded-lg">
+                  <button onClick={copyLink} className="bg-gray-800 text-white px-4 py-2 rounded-full flex items-center gap-2 text-xs font-bold">
+                    <Share2 size={14} /> Copy Link
+                  </button>
+                </div>
+              </div>
+              <div className="text-center">
+                <p className="font-bold text-gray-800">Invite Player 2</p>
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold italic">Scan or share the link</p>
               </div>
             </div>
-            <div className="text-center">
-              <p className="font-bold text-gray-800">Invite Your Rival</p>
-              <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold italic">Scan or share the link</p>
-            </div>
-          </div>
+          )}
 
           <div
             className="grid grid-cols-3 gap-[5px] p-[5px] rounded-2xl shadow-2xl overflow-hidden transform hover:scale-[1.02] transition-transform duration-300"
