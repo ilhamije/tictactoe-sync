@@ -133,58 +133,66 @@ function TicTacToeContent() {
 
   useEffect(() => {
     if (roomId) {
+      // We don't call fetchGame here anymore because we'll trigger it with a dependency
+      // Or just keep it but ensure the channel logic handles the role update.
       fetchGame(roomId)
-
-      const channel = supabase.channel(`room:${roomId}`, {
-        config: {
-          presence: {
-            key: sessionStorage.getItem(`room_${roomId}_role`) || 'unknown',
-          },
-        },
-      })
-
-      channel
-        .on('postgres_changes', {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'games',
-          filter: `room_id=eq.${roomId}`
-        }, (payload) => {
-          setBoard(payload.new.board)
-          setTurn(payload.new.current_turn)
-          setWinner(payload.new.winner)
-          setScores({ p1: payload.new.p1_score || 0, p2: payload.new.p2_score || 0 })
-          const currentP1Symbol = payload.new.p1_symbol
-          setP1Symbol(currentP1Symbol)
-
-          const role = sessionStorage.getItem(`room_${roomId}_role`)
-          if (role === 'p1') {
-            setMySymbol(currentP1Symbol)
-          } else {
-            setMySymbol(currentP1Symbol === 'X' ? 'O' : 'X')
-          }
-          setError(null)
-        })
-        .on('presence', { event: 'sync' }, () => {
-          const state = channel.presenceState()
-          setPlayers(state)
-          // If we see 'p2' in the presence state, Player 2 has joined
-          setPlayer2Joined(!!state['p2'])
-        })
-        .subscribe(async (status) => {
-          if (status === 'SUBSCRIBED') {
-            await channel.track({ online_at: new Date().toISOString() })
-          }
-          if (status === 'CHANNEL_ERROR') {
-            setError("Real-time sync error.")
-          }
-        })
-
-      return () => {
-        supabase.removeChannel(channel)
-      }
     }
   }, [roomId, fetchGame])
+
+  useEffect(() => {
+    // Only subscribe once we have a roomId
+    if (!roomId) return
+
+    const currentRole = sessionStorage.getItem(`room_${roomId}_role`)
+
+    const channel = supabase.channel(`room:${roomId}`, {
+      config: {
+        presence: {
+          key: currentRole || 'unknown',
+        },
+      },
+    })
+
+    channel
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'games',
+        filter: `room_id=eq.${roomId}`
+      }, (payload) => {
+        setBoard(payload.new.board)
+        setTurn(payload.new.current_turn)
+        setWinner(payload.new.winner)
+        setScores({ p1: payload.new.p1_score || 0, p2: payload.new.p2_score || 0 })
+        const currentP1Symbol = payload.new.p1_symbol
+        setP1Symbol(currentP1Symbol)
+
+        const role = sessionStorage.getItem(`room_${roomId}_role`)
+        if (role === 'p1') {
+          setMySymbol(currentP1Symbol)
+        } else if (role === 'p2') {
+          setMySymbol(currentP1Symbol === 'X' ? 'O' : 'X')
+        }
+        setError(null)
+      })
+      .on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState()
+        setPlayers(state)
+        // Check if both p1 and p2 are present in the room
+        setPlayer2Joined(!!state['p2'])
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          // If we were 'unknown' initially, we might need to re-track once fetchGame completes
+          // But a better way is to wait for the role to be set before subscribing or re-tracking.
+          await channel.track({ online_at: new Date().toISOString() })
+        }
+      })
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [roomId, mySymbol]) // Re-run if mySymbol changes (which happens when fetchGame sets role)
 
   const handleMove = async (index: number) => {
     if (board[index] || winner || turn !== mySymbol || !roomId) return
