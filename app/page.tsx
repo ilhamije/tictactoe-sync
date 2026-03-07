@@ -15,9 +15,12 @@ function TicTacToeContent() {
   const [mySymbol, setMySymbol] = useState<'X' | 'O' | null>(null)
   const [turn, setTurn] = useState<'X' | 'O'>('X')
   const [winner, setWinner] = useState<string | null>(null)
+  const [scores, setScores] = useState({ p1: 0, p2: 0 })
+  const [p1Symbol, setP1Symbol] = useState<'X' | 'O'>('X')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isMounted, setIsMounted] = useState(false)
+  const [selectedStartSymbol, setSelectedStartSymbol] = useState<'X' | 'O'>('X')
 
   useEffect(() => {
     setIsMounted(true)
@@ -25,7 +28,7 @@ function TicTacToeContent() {
 
   const colors = {
     bg: '#E8F5E9',      // Soft Green
-    lines: '#9E9E9E',   // Grey
+    lines: '#bcbabaff',   // Grey
     x: '#2196F3',       // Blue
     o: '#FF9800'        // Orange
   }
@@ -53,19 +56,26 @@ function TicTacToeContent() {
 
     const { error } = await supabase
       .from('games')
-      .insert([{ room_id: newRoomId, board: Array(9).fill(null), current_turn: 'X' }])
+      .insert([{
+        room_id: newRoomId,
+        board: Array(9).fill(null),
+        current_turn: 'X',
+        p1_symbol: selectedStartSymbol,
+        p1_score: 0,
+        p2_score: 0
+      }])
 
     if (error) {
       console.error(error)
-      setError("Failed to create room. Check your Supabase URL/Key.")
+      setError("Failed to create room. Make sure your 'games' table has p1_symbol (text), p1_score (int), and p2_score (int) columns.")
       setLoading(false)
       return
     }
 
     if (typeof window !== 'undefined') {
-      sessionStorage.setItem(`room_${newRoomId}_symbol`, 'X')
+      sessionStorage.setItem(`room_${newRoomId}_role`, 'p1')
     }
-    setMySymbol('X')
+    setMySymbol(selectedStartSymbol)
     router.push(`?room=${newRoomId}`)
     setLoading(false)
   }
@@ -104,14 +114,19 @@ function TicTacToeContent() {
     setBoard(data.board)
     setTurn(data.current_turn as 'X' | 'O')
     setWinner(data.winner)
+    setScores({ p1: data.p1_score || 0, p2: data.p2_score || 0 })
+    const currentP1Symbol = (data.p1_symbol as 'X' | 'O') || 'X'
+    setP1Symbol(currentP1Symbol)
 
-    const storedSymbol = sessionStorage.getItem(`room_${rid}_symbol`)
-    if (storedSymbol === 'X' || storedSymbol === 'O') {
-      setMySymbol(storedSymbol)
+    const role = sessionStorage.getItem(`room_${rid}_role`)
+    if (role === 'p1') {
+      setMySymbol(currentP1Symbol)
+    } else if (role === 'p2') {
+      setMySymbol(currentP1Symbol === 'X' ? 'O' : 'X')
     } else {
-      // If we joined via link and don't have a symbol, we are 'O'
-      setMySymbol('O')
-      sessionStorage.setItem(`room_${rid}_symbol`, 'O')
+      // Joining for the first time
+      sessionStorage.setItem(`room_${rid}_role`, 'p2')
+      setMySymbol(currentP1Symbol === 'X' ? 'O' : 'X')
     }
     setLoading(false)
   }, [])
@@ -123,7 +138,7 @@ function TicTacToeContent() {
       const channel = supabase.channel(`room:${roomId}`, {
         config: {
           presence: {
-            key: mySymbol || 'unknown',
+            key: sessionStorage.getItem(`room_${roomId}_role`) || 'unknown',
           },
         },
       })
@@ -138,26 +153,30 @@ function TicTacToeContent() {
           setBoard(payload.new.board)
           setTurn(payload.new.current_turn)
           setWinner(payload.new.winner)
+          setScores({ p1: payload.new.p1_score || 0, p2: payload.new.p2_score || 0 })
+          const currentP1Symbol = payload.new.p1_symbol
+          setP1Symbol(currentP1Symbol)
+
+          const role = sessionStorage.getItem(`room_${roomId}_role`)
+          if (role === 'p1') {
+            setMySymbol(currentP1Symbol)
+          } else {
+            setMySymbol(currentP1Symbol === 'X' ? 'O' : 'X')
+          }
           setError(null)
         })
         .on('presence', { event: 'sync' }, () => {
           const state = channel.presenceState()
           setPlayers(state)
-          // If we see 'O' in the presence state, Player 2 has joined
-          setPlayer2Joined(!!state['O'])
-        })
-        .on('presence', { event: 'join' }, ({ key, newPresences }) => {
-          console.log('join', key, newPresences)
-        })
-        .on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
-          console.log('leave', key, leftPresences)
+          // If we see 'p2' in the presence state, Player 2 has joined
+          setPlayer2Joined(!!state['p2'])
         })
         .subscribe(async (status) => {
           if (status === 'SUBSCRIBED') {
             await channel.track({ online_at: new Date().toISOString() })
           }
           if (status === 'CHANNEL_ERROR') {
-            setError("Real-time sync error. Make sure 'Realtime' is enabled for the 'games' table in Supabase.")
+            setError("Real-time sync error.")
           }
         })
 
@@ -165,7 +184,7 @@ function TicTacToeContent() {
         supabase.removeChannel(channel)
       }
     }
-  }, [roomId, fetchGame, mySymbol])
+  }, [roomId, fetchGame])
 
   const handleMove = async (index: number) => {
     if (board[index] || winner || turn !== mySymbol || !roomId) return
@@ -175,29 +194,46 @@ function TicTacToeContent() {
     const gameWinner = checkWinner(newBoard)
     const nextTurn = mySymbol === 'X' ? 'O' : 'X'
 
+    let newP1Score = scores.p1
+    let newP2Score = scores.p2
+
+    if (gameWinner && gameWinner !== 'Draw') {
+      // Determine if p1 or p2 won based on their symbol
+      const p1IsWinner = gameWinner === p1Symbol
+      if (p1IsWinner) newP1Score++
+      else newP2Score++
+    }
+
     const { error } = await supabase
       .from('games')
       .update({
         board: newBoard,
         current_turn: nextTurn,
-        winner: gameWinner
+        winner: gameWinner,
+        p1_score: newP1Score,
+        p2_score: newP2Score
       })
       .eq('room_id', roomId)
 
     if (error) {
       console.error(error)
-      setError("Sync failed. Check connection.")
+      setError("Sync failed.")
     }
   }
 
   const resetGame = async () => {
     if (!roomId) return
+
+    // Auto switch side: toggle Player 1's symbol
+    const nextP1Symbol = p1Symbol === 'X' ? 'O' : 'X'
+
     const { error } = await supabase
       .from('games')
       .update({
         board: Array(9).fill(null),
-        current_turn: 'X',
-        winner: null
+        current_turn: 'X', // Standard: X always starts
+        winner: null,
+        p1_symbol: nextP1Symbol
       })
       .eq('room_id', roomId)
 
@@ -261,6 +297,23 @@ function TicTacToeContent() {
             </h1>
             <div className="absolute -top-6 -right-6 rotate-12 bg-yellow-400 text-xs font-bold px-2 py-1 rounded shadow-sm">REAL-TIME</div>
           </div>
+          <div className="flex flex-col items-center gap-4">
+            <p className="text-xs font-bold text-gray-500 uppercase tracking-widest">Choose Your Weapon</p>
+            <div className="flex gap-4">
+              <button
+                onClick={() => setSelectedStartSymbol('X')}
+                className={`w-16 h-16 rounded-2xl flex items-center justify-center text-3xl font-black transition-all ${selectedStartSymbol === 'X' ? 'bg-[#2196F3] text-white scale-110 shadow-lg' : 'bg-white text-[#2196F3] border-2 border-[#2196F3]/20 hover:scale-105'}`}
+              >
+                X
+              </button>
+              <button
+                onClick={() => setSelectedStartSymbol('O')}
+                className={`w-16 h-16 rounded-2xl flex items-center justify-center text-3xl font-black transition-all ${selectedStartSymbol === 'O' ? 'bg-[#FF9800] text-white scale-110 shadow-lg' : 'bg-white text-[#FF9800] border-2 border-[#FF9800]/20 hover:scale-105'}`}
+              >
+                O
+              </button>
+            </div>
+          </div>
           <button
             disabled={loading}
             className="group relative px-10 py-5 bg-white text-gray-800 font-black text-xl rounded-2xl shadow-[0_8px_0_0_#9E9E9E] hover:shadow-[0_4px_0_0_#9E9E9E] hover:translate-y-[4px] active:shadow-none active:translate-y-[8px] transition-all flex items-center gap-3 overflow-hidden"
@@ -271,21 +324,52 @@ function TicTacToeContent() {
         </div>
       ) : (
         <div className="flex flex-col items-center gap-6 w-full max-w-md animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <div className="flex justify-between w-full items-center bg-white/60 p-4 rounded-2xl backdrop-blur-md border border-white shadow-sm">
-            <div className="flex items-center gap-2">
-              <div className={`p-2 rounded-lg ${mySymbol === 'X' ? 'bg-blue-100 text-[#2196F3]' : 'bg-orange-100 text-[#FF9800]'}`}>
-                <User size={20} />
+          <div className="flex flex-col gap-4 w-full">
+            <div className="flex justify-between w-full items-center bg-white/60 p-4 rounded-2xl backdrop-blur-md border border-white shadow-sm relative overflow-hidden">
+              {/* Progress bar for scores? Or just numbers */}
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-lg ${sessionStorage.getItem(`room_${roomId}_role`) === 'p1' ? 'bg-blue-100 text-[#2196F3]' : 'bg-orange-100 text-[#FF9800]'}`}>
+                  <User size={20} />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[10px] uppercase font-bold text-gray-400">You ({sessionStorage.getItem(`room_${roomId}_role`) === 'p1' ? 'P1' : 'P2'})</span>
+                  <span className="font-bold text-gray-800 leading-none text-lg">{mySymbol}</span>
+                </div>
               </div>
-              <div className="flex flex-col">
-                <span className="text-[10px] uppercase font-bold text-gray-400">Role</span>
-                <span className="font-bold text-gray-800 leading-none">{mySymbol === 'X' ? 'Player 1 (X)' : 'Player 2 (O)'}</span>
+
+              <div className="flex flex-col items-center">
+                <span className="text-[10px] uppercase font-bold text-gray-400 mb-1">Turn</span>
+                <div className={`px-4 py-1 rounded-full font-bold text-white transition-all transform ${turn === 'X' ? 'bg-[#2196F3]' : 'bg-[#FF9800]'} ${turn === mySymbol ? 'scale-110 shadow-lg' : 'opacity-70'}`}>
+                  {turn === 'X' ? (p1Symbol === 'X' ? 'P1' : 'P2') : (p1Symbol === 'O' ? 'P1' : 'P2')} {turn === mySymbol ? '(YOU)' : ''}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 text-right">
+                <div className="flex flex-col">
+                  <span className="text-[10px] uppercase font-bold text-gray-400">Rival</span>
+                  <span className="font-bold text-gray-800 leading-none text-lg">{mySymbol === 'X' ? 'O' : 'X'}</span>
+                </div>
+                <div className={`p-2 rounded-lg ${sessionStorage.getItem(`room_${roomId}_role`) === 'p1' ? 'bg-orange-100 text-[#FF9800]' : 'bg-blue-100 text-[#2196F3]'}`}>
+                  <User size={20} />
+                </div>
               </div>
             </div>
 
-            <div className="flex flex-col items-center">
-              <span className="text-[10px] uppercase font-bold text-gray-400">Current Turn</span>
-              <div className={`px-4 py-1 rounded-full font-bold text-white transition-all transform ${turn === 'X' ? 'bg-[#2196F3]' : 'bg-[#FF9800]'} ${turn === mySymbol ? 'scale-110 shadow-lg' : 'opacity-70'}`}>
-                {turn === 'X' ? 'Player 1' : 'Player 2'} {turn === mySymbol ? '(YOU)' : ''}
+            {/* Scoreboard Section */}
+            <div className="grid grid-cols-2 gap-4 w-full">
+              <div className="bg-white/40 p-3 rounded-xl border border-white/60 flex flex-col items-center">
+                <span className="text-[9px] uppercase font-black text-gray-400">Player 1</span>
+                <span className="text-2xl font-black text-gray-800 tracking-tighter">{scores.p1}</span>
+                <div className={`w-full h-1 mt-2 rounded-full bg-gray-200 overflow-hidden`}>
+                  <div className="h-full bg-[#2196F3] transition-all duration-500" style={{ width: `${(scores.p1 / (scores.p1 + scores.p2 || 1)) * 100}%` }} />
+                </div>
+              </div>
+              <div className="bg-white/40 p-3 rounded-xl border border-white/60 flex flex-col items-center">
+                <span className="text-[9px] uppercase font-black text-gray-400">Player 2</span>
+                <span className="text-2xl font-black text-gray-800 tracking-tighter">{scores.p2}</span>
+                <div className={`w-full h-1 mt-2 rounded-full bg-gray-200 overflow-hidden`}>
+                  <div className="h-full bg-[#FF9800] transition-all duration-500" style={{ width: `${(scores.p2 / (scores.p1 + scores.p2 || 1)) * 100}%` }} />
+                </div>
               </div>
             </div>
           </div>
