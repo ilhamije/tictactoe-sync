@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { QRCodeSVG } from 'qrcode.react'
 import { supabase } from '@/lib/supabase'
-import { RefreshCw, User, Trophy, Share2 } from 'lucide-react'
+import { RefreshCw, User, Trophy, Share2, Coffee } from 'lucide-react'
 
 function TicTacToeContent() {
   const searchParams = useSearchParams()
@@ -251,21 +251,7 @@ function TicTacToeContent() {
     }
   }
 
-  useEffect(() => {
-    if (winner && winner !== 'Draw') {
-      setTimeout(() => {
-        if (winner === mySymbol) {
-          if (confirm("You win, restart game?")) resetGame()
-        } else {
-          if (confirm("You lose, restart game?")) resetGame()
-        }
-      }, 100)
-    } else if (winner === 'Draw') {
-      setTimeout(() => {
-        if (confirm("It's a draw, restart game?")) resetGame()
-      }, 100)
-    }
-  }, [winner, mySymbol, roomId])
+  // We'll use a UI overlay instead of window.confirm for a more premium experience
 
   const Square = ({ value, index }: { value: string | null, index: number }) => {
     const isClickable = !value && !winner && turn === mySymbol
@@ -329,6 +315,15 @@ function TicTacToeContent() {
           >
             {loading ? <RefreshCw className="animate-spin" /> : "START MASSIVE BATTLE"}
           </button>
+          <a
+            href="https://sociabuzz.com/ilhamije/tribe"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 px-6 py-3 bg-[#FF4081] text-white rounded-xl font-bold shadow-lg hover:bg-[#F50057] active:scale-95 transition-all text-sm group"
+          >
+            <Coffee className="w-4 h-4 text-white fill-current group-hover:scale-125 transition-transform" />
+            Buy me coffee
+          </a>
         </div>
       ) : (
         <div className="flex flex-col items-center gap-6 w-full max-w-md animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -424,6 +419,46 @@ function TicTacToeContent() {
               >
                 Leave
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {winner && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-in fade-in duration-300 p-4">
+          <div className="bg-white rounded-[2.5rem] p-8 shadow-2xl flex flex-col items-center gap-6 max-w-sm w-full border-4 border-white/20 animate-in zoom-in slide-in-from-bottom-8 duration-500">
+            <div className={`w-24 h-24 rounded-full flex items-center justify-center ${winner === 'Draw' ? 'bg-gray-100' : (winner === mySymbol ? 'bg-yellow-100' : 'bg-red-50')}`}>
+              <Trophy size={48} className={winner === 'Draw' ? 'text-gray-400' : (winner === mySymbol ? 'text-yellow-600 animate-bounce' : 'text-red-400')} />
+            </div>
+
+            <div className="text-center">
+              <h2 className="text-4xl font-black text-gray-800 tracking-tighter">
+                {winner === 'Draw' ? "IT'S A DRAW!" : (winner === mySymbol ? "VICTORY!" : "DEFEAT!")}
+              </h2>
+              <p className="text-gray-500 font-bold uppercase text-[10px] tracking-widest mt-1">
+                {winner === 'Draw' ? "Nobody won this time" : (winner === mySymbol ? "You dominated the board" : "Better luck next round")}
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3 w-full mt-2">
+              <button
+                onClick={resetGame}
+                className="w-full py-4 bg-gray-800 text-white rounded-2xl font-black text-lg shadow-[0_6px_0_0_#424242] hover:shadow-[0_4px_0_0_#424242] hover:translate-y-[2px] active:shadow-none active:translate-y-[6px] transition-all"
+              >
+                PLAY AGAIN
+              </button>
+
+              {(scores.p1 + scores.p2) > 0 && (scores.p1 + scores.p2) % 3 === 0 && (
+                <a
+                  href="https://sociabuzz.com/ilhamije/tribe"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full flex items-center justify-center gap-2 py-4 bg-[#FF4081] text-white rounded-2xl font-black text-lg shadow-[0_6px_0_0_#C2185B] hover:shadow-[0_4px_0_0_#C2185B] hover:translate-y-[2px] active:shadow-none active:translate-y-[6px] transition-all text-center animate-bounce-subtle mt-2"
+                >
+                  <Coffee className="fill-current w-5 h-5 transition-transform group-hover:scale-125" />
+                  BUY ME COFFEE ☕
+                </a>
+              )}
             </div>
           </div>
         </div>
